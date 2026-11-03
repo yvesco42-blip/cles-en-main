@@ -156,6 +156,7 @@ button:focus-visible,.chip:focus-within{outline:3px solid var(--accent);outline-
 .slot.cur{border-color:var(--accent);border-style:solid;color:var(--accent)}
 .slot.ok{border-style:solid;border-color:var(--good);color:var(--good)}
 .slot.bad{border-style:solid;border-color:var(--bad);color:var(--bad)}
+.slot.miss{border-style:solid;color:var(--muted)}
 .msg{font-size:.95rem;color:var(--muted);text-align:center}
 .msg b{color:var(--ink)}
 .float{position:absolute;left:50%;top:40%;font-family:var(--font-display);font-weight:800;font-size:1.6rem;color:var(--good);pointer-events:none;animation:floatUp .8s ease-out forwards}
@@ -186,6 +187,7 @@ button:focus-visible,.chip:focus-within{outline:3px solid var(--accent);outline-
 .nt.cur ellipse,.nt.cur .hd{fill:var(--accent)} .nt.cur .stem{stroke:var(--accent)}
 .nt.ok ellipse,.nt.ok .hd{fill:var(--good)} .nt.ok .stem{stroke:var(--good)}
 .nt.bad ellipse,.nt.bad .hd{fill:var(--bad)} .nt.bad .stem{stroke:var(--bad)}
+.nt.miss ellipse,.nt.miss .hd{fill:var(--muted)} .nt.miss .stem{stroke:var(--muted)}
 .nt ellipse.hole{fill:var(--paper)}
 .lbl{font:700 10px var(--font-body);fill:var(--muted)}
 .lbl.ok{fill:var(--good)} .lbl.bad{fill:var(--bad)}
@@ -380,7 +382,7 @@ function freqOf(clef,pos){
   return 440*Math.pow(2,(midi-69)/12);
 }
 function tone(f, when=0, dur=0.9, vol=0.22){
-  const a = ac(); if(!a || !cfg().sound || P.on) return;  // en mode chant, le micro entendrait le jeu
+  const a = ac(); if(!a || !cfg().sound || P.on || V.on) return;  // sinon le micro entendrait le jeu
   const t = a.currentTime + when;
   const g = a.createGain(); g.connect(a.destination);
   g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+0.012); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
@@ -390,77 +392,129 @@ function tone(f, when=0, dur=0.9, vol=0.22){
   });
 }
 function buzz(){
-  const a = ac(); if(!a || !cfg().sound || P.on) return;
+  const a = ac(); if(!a || !cfg().sound || P.on || V.on) return;
   const t = a.currentTime, o = a.createOscillator(), g = a.createGain();
   o.type='square'; o.frequency.setValueAtTime(150,t); o.frequency.exponentialRampToValueAtTime(90,t+0.2);
   g.gain.setValueAtTime(0.06,t); g.gain.exponentialRampToValueAtTime(0.0001,t+0.22);
   o.connect(g); g.connect(a.destination); o.start(t); o.stop(t+0.25);
 }
 
-/* ---------- Reconnaissance vocale ---------- */
-// ce que Chrome entend souvent à la place des syllabes de solfège
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-const VOICE = [
-  ['do','dos','dot','doh','dau','deau','ut','hut'],
-  ['re','rai','raie','ray','rey','ret','rez','reh'],
-  ['mi','mie','mis','mit','mil','me','mee'],
-  ['fa','fat','fas','va','pha','fah'],
-  ['sol','sole','sols','solo','saul','sold','soll','sal'],
-  ['la','las','lat','lah','lha'],
-  ['si','scie','six','6','ci','cie','sis','sie','see','sea','sy'],
-];
-const VMAP = {};
-VOICE.forEach((ws,s)=>ws.forEach(w=>VMAP[w]=s));
-const CORE = ['sol','do','re','mi','fa','la','si'];
-const norm = t => t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/['’]/g,'');
-// « doremi » collé en un seul mot -> do, ré, mi
-function splitCore(t){
-  if (!t) return [];
-  for (const c of CORE) if (t.startsWith(c)){ const r = splitCore(t.slice(c.length)); if (r) return [VMAP[c], ...r]; }
-  return null;
-}
-function parseNotes(text){
-  const out = [];
-  norm(text).split(/[^a-z0-9]+/).forEach(t=>{
-    if (!t) return;
-    if (t in VMAP) out.push(VMAP[t]);
-    else { const r = splitCore(t); if (r) out.push(...r); }
+/* ---------- Reconnaissance vocale (moteur Vosk, sur l'appareil, sans envoi de son) ---------- */
+const WORDS = ['do','ré','mi','fa','sol','la','si'];
+const V = {on:false, model:null, loading:false, rec:null, grammar:'', stream:null, src:null, node:null, sink:null,
+  words:[], partial:[], used:0, holdT:null, idleT:null};
+function loadScript(src){
+  return new Promise((ok,ko)=>{
+    if (window.Vosk) return ok();
+    const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = ko; document.head.appendChild(s);
   });
-  return out;
 }
-const CMD = /\b(suivant|suivante|continuer|continue|rejouer|encore)\b/;
-const V = {rec:null, on:false, used:{}};
-function voiceStart(){
-  if (!SR){ toast('La reconnaissance vocale demande Google Chrome.'); return false; }
-  if (V.rec) return true;
-  const r = new SR();
-  r.lang = 'fr-FR'; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1;
-  r.onstart = ()=>{ V.used = {}; };
-  r.onresult = e=>{
-    for (let i=e.resultIndex;i<e.results.length;i++){
-      const txt = e.results[i][0].transcript;
-      if (!$('summary').hidden){
-        if (CMD.test(norm(txt)) && $('sumAgain')) { showHeard(txt, true); $('sumAgain').click(); }
-        continue;
-      }
-      // les résultats provisoires arrivent vite : on ne traite que les notes pas encore comptées
-      const notes = parseNotes(txt), done = V.used[i] || 0;
-      if (notes.length>done){ V.used[i] = notes.length; showHeard(txt, true); notes.slice(done).forEach(s=>answer(s)); }
-      else if (e.results[i].isFinal && !notes.length) showHeard(txt, false);
+async function voiceStart(){
+  if (V.stream || V.loading) return;
+  V.loading = true;
+  $('micLbl').textContent = 'Voix…';
+  let stream = null;
+  try {
+    if (!V.model){
+      toast('Préparation de la voix…');
+      await loadScript('vosk.js');
+      V.model = await Vosk.createModel('model.tar.gz');
     }
-  };
-  r.onerror = e=>{
-    if (['not-allowed','service-not-allowed','audio-capture'].includes(e.error)){
-      setInput('tap');
-      toast(e.error==='audio-capture' ? 'Aucun micro trouvé sur cet appareil.' : 'Le micro n’est pas autorisé sur cette page. Ouvre le jeu dans Chrome depuis son adresse https.');
-    }
-  };
-  // Chrome coupe l'écoute après un silence : on relance tant que le micro est activé
-  r.onend = ()=>{ if (V.rec===r) V.rec = null; if (V.on && G) setTimeout(()=>{ if (V.on && G && !V.rec) voiceStart(); }, 200); };
-  try { r.start(); V.rec = r; } catch(e){ return false; }
-  return true;
+    stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1, echoCancellation:false, noiseSuppression:true, autoGainControl:true}});
+  } catch(e){
+    V.loading = false; setInput('tap');
+    const n = e && e.name;
+    toast(n==='NotFoundError' ? 'Aucun micro trouvé sur cet appareil.'
+      : n==='NotAllowedError' ? 'Le micro n’est pas autorisé sur cette page. Ouvre le jeu depuis son adresse https et autorise le micro.'
+      : 'La voix n’a pas pu se charger. Vérifie ta connexion, puis réessaie.');
+    return;
+  }
+  V.loading = false;
+  const a = ac();
+  if (!V.on || !a){ stream.getTracks().forEach(t=>t.stop()); return; }
+  V.stream = stream;
+  V.src = a.createMediaStreamSource(stream);
+  V.node = a.createScriptProcessor(2048, 1, 1);
+  V.sink = a.createGain(); V.sink.gain.value = 0;
+  V.node.onaudioprocess = e=>{ if (V.rec) V.rec.acceptWaveformFloat(new Float32Array(e.inputBuffer.getChannelData(0)), a.sampleRate); };
+  V.src.connect(V.node); V.node.connect(V.sink); V.sink.connect(a.destination);
+  $('micLbl').textContent = 'Voix';
+  V.grammar = '';
+  voiceTarget();
 }
-function voiceStop(){ const r = V.rec; V.rec = null; if (r) try { r.abort(); } catch(e){} }
+function voiceStop(){
+  clearTimeout(V.holdT); clearTimeout(V.idleT);
+  if (V.node){ V.node.onaudioprocess = null; V.src.disconnect(); V.node.disconnect(); V.sink.disconnect(); }
+  if (V.stream) V.stream.getTracks().forEach(t=>t.stop());
+  if (V.rec) try { V.rec.remove(); } catch(e){}
+  V.stream = V.src = V.node = V.sink = V.rec = null; V.grammar = '';
+}
+// le moteur connaît la ligne affichée : il la suit mieux, et une note fausse reste un mot à part
+function voiceExpected(){
+  if (G.mode==='melodie') return G.line.notes.map(n=>noteOf(n.clef,n.pos));
+  if (G.mode==='vertical') return G.chord.pos.map(p=>noteOf(G.chord.clef,p));
+  return [];
+}
+function voiceGrammar(exp){
+  const g = [];
+  for (let a=0;a<exp.length;a++) for (let b=a+2;b<=exp.length;b++) g.push(exp.slice(a,b).map(i=>WORDS[i]).join(' '));
+  return JSON.stringify([...g, ...WORDS, 'suivant', '[unk]']);
+}
+function voiceTarget(){
+  if (!V.on || !V.stream || !G) return;
+  clearTimeout(V.holdT); clearTimeout(V.idleT);
+  const g = voiceGrammar(voiceExpected());
+  if (V.rec) try { V.rec.remove(); } catch(e){}
+  const rec = new V.model.KaldiRecognizer(AC.sampleRate, g);
+  V.rec = rec; V.grammar = g; V.words = []; V.partial = []; V.used = 0;
+  const clean = t=>(t||'').split(' ').filter(w=>w && w!=='[unk]');
+  rec.on('result', m=>{ if (rec!==V.rec) return; V.words.push(...clean(m.result.text)); V.partial = []; voiceProcess(true); });
+  rec.on('partialresult', m=>{ if (rec!==V.rec) return; V.partial = clean(m.result.partial); voiceProcess(false); });
+}
+function voiceNext(){  // note attendue à cet instant
+  const t = current(); return t ? noteOf(t.clef,t.pos) : -1;
+}
+function voiceProcess(final){
+  clearTimeout(V.holdT);
+  const all = V.words.concat(V.partial);
+  if (!G) return;
+  if (!$('summary').hidden){
+    if (all.slice(V.used).includes('suivant') && $('sumAgain')){ V.used = all.length; $('sumAgain').click(); }
+    else V.used = all.length;
+    return;
+  }
+  if (all.length>V.used) showHeard(all.slice(-8).join(' '), true, true);
+  while (V.used<all.length){
+    if (!G || G.lock || !$('summary').hidden){ V.used = all.length; break; }
+    const s = WORDS.indexOf(all[V.used]);
+    if (s<0){ V.used++; continue; }
+    // le dernier mot d'un résultat provisoire peut encore changer : on l'attend s'il ne colle pas
+    if (!final && V.used===all.length-1 && s!==voiceNext()){
+      V.holdT = setTimeout(()=>voiceProcess(true), 800);
+      break;
+    }
+    V.used++;
+    voiceCommit(s);
+  }
+  if (final){
+    clearTimeout(V.idleT);
+    V.idleT = setTimeout(voiceIdle, 900);
+  }
+}
+// un mot attendu un peu plus loin : les notes d'avant n'ont pas été entendues, ce n'est pas une erreur
+function voiceCommit(s){
+  const exp = voiceExpected();
+  const i = G.mode==='melodie' ? G.line.i : G.mode==='vertical' ? G.chord.i : 0;
+  for (let j=i+1; j<exp.length && j<=i+2; j++){
+    if (exp[i]!==s && exp[j]===s){ for (let k=i;k<j;k++) voiceSkip(); break; }
+  }
+  if (G && !G.lock) answer(s);
+}
+function voiceIdle(){  // fin de phrase : les dernières notes avalées ne bloquent pas la ligne
+  if (!G || G.lock || !$('summary').hidden) return;
+  if (G.mode==='melodie'){ const l = G.line.notes.length-G.line.i; if (l>0 && l<=2) while (G && !G.lock && $('summary').hidden && G.line.i<G.line.notes.length) voiceSkip(); }
+  if (G.mode==='vertical' && G.chord.pos.length-G.chord.i===1) voiceSkip();
+}
 
 /* ---------- Notes chantées ou jouées (calcul local, sans internet) ---------- */
 const CHROMA = ['Do','Do♯','Ré','Ré♯','Mi','Fa','Fa♯','Sol','Sol♯','La','La♯','Si'];
@@ -544,7 +598,7 @@ function pitchTick(){
 const INPUTS = [['tap','Boutons','Micro'], ['voice','Nom des notes','Voix'], ['pitch','Chant ou instrument','Chant']];
 const INPUT_NOTES = {
   tap: 'Touche les boutons Do à Si.',
-  voice: 'Dis le nom des notes à voix haute. Demande Chrome et internet.',
+  voice: 'Dis les notes à voix haute, aussi vite que tu peux. Rien ne quitte l’appareil. 34 Mo à charger la première fois.',
   pitch: 'Chante ou joue la note, à n’importe quelle octave. Marche sans internet.',
 };
 function applyInput(){
@@ -554,7 +608,7 @@ function applyInput(){
   if (!P.on) pitchStop();
   $('micBtn').setAttribute('aria-pressed', m==='tap' ? 'false' : 'true');
   $('micLbl').textContent = INPUTS.find(i=>i[0]===m)[2];
-  if (V.on && !voiceStart()) setInput('tap');
+  if (V.on) voiceStart();
   if (P.on) pitchStart();
 }
 function setInput(m){ S.cfg.input = m; save(); applyInput(); }
@@ -727,7 +781,7 @@ function newSingle(){
   const pos = weightedPos(clef, clef===G.lastClef ? G.lastPos : null);
   G.q = {clef, pos, cls:'', label:null}; G.lastClef = clef; G.lastPos = pos; G.hint = false;
   G.lock = false; drawSingle(); statusEl.innerHTML = `<div class="msg">Quelle est cette note ?</div>`;
-  updateBar();
+  updateBar(); voiceTarget();
 }
 function drawSingle(){
   const q = G.q, L = level();
@@ -746,7 +800,7 @@ function newLine(){
     x += 4;
   });
   G.line = {segs, notes, width:x+16, i:0, errors:0, t0:performance.now()};
-  G.hint = false; G.lock = false; drawLine(); updateBar();
+  G.hint = false; G.lock = false; drawLine(); updateBar(); voiceTarget();
 }
 function drawLine(){
   const ln = G.line, L = level();
@@ -762,17 +816,17 @@ function newChord(){
   const clef = pickClef(G.lastClef);
   G.lastClef = clef;
   G.chord = {clef, pos:genChord(), i:0, res:[]};
-  G.hint = false; G.lock = false; drawChord(); updateBar();
+  G.hint = false; G.lock = false; drawChord(); updateBar(); voiceTarget();
 }
 function drawChord(){
   const ch = G.chord, L = level();
   const notes = ch.pos.map((p,k)=>({x:96, pos:p, kind:'ronde', cls: ch.res[k] ? ch.res[k].cls : (k===ch.i ? 'cur' : '')}));
-  const labels = ch.pos.map((p,k)=> ch.res[k] && (ch.res[k].cls==='ok' || cfg().reveal) ? {x:96,pos:p,t:NAMES[noteOf(ch.clef,p)],cls:ch.res[k].cls,side:'right'} : null).filter(Boolean);
+  const labels = ch.pos.map((p,k)=> ch.res[k] && ch.res[k].cls!=='miss' && (ch.res[k].cls==='ok' || cfg().reveal) ? {x:96,pos:p,t:NAMES[noteOf(ch.clef,p)],cls:ch.res[k].cls,side:'right'} : null).filter(Boolean);
   paint(staffEl, {width:160, minPos:L.min, maxPos:L.max, segs:[{clef:ch.clef,x:10}], notes, labels, hint:G.hint});
   statusEl.innerHTML = `<div class="msg" style="width:100%">Du grave vers l'aigu${cfg().input==='pitch'?', une note à la fois':''}</div>` + ch.pos.map((p,k)=>{
     const r = ch.res[k];
     const c = r ? r.cls : (k===ch.i ? 'cur' : '');
-    const t = r ? (r.cls==='ok' || cfg().reveal ? NAMES[noteOf(ch.clef,p)] : '✗') : (k===ch.i ? '?' : '·');
+    const t = r ? (r.cls==='miss' ? '–' : r.cls==='ok' || cfg().reveal ? NAMES[noteOf(ch.clef,p)] : '✗') : (k===ch.i ? '?' : '·');
     return `<div class="slot ${c}">${t}</div>`;
   }).join('');
 }
@@ -820,6 +874,10 @@ function onLine(ok, label){
   const ln = G.line, n = ln.notes[ln.i];
   n.cls = ok ? 'ok' : 'bad'; n.label = ok ? null : label;
   if (!ok) ln.errors++;
+  lineNext();
+}
+function lineNext(){
+  const ln = G.line;
   ln.i++; G.hint = false;
   drawLine();
   if (ln.i>=ln.notes.length){
@@ -829,10 +887,21 @@ function onLine(ok, label){
     setTimeout(()=>{ if (G===g) endLine(secs); }, 450);
   }
 }
+function voiceSkip(){
+  if (G.mode==='melodie'){
+    const ln = G.line; ln.notes[ln.i].cls = 'miss'; ln.skips = (ln.skips||0)+1; lineNext();
+  } else if (G.mode==='vertical'){
+    const ch = G.chord; ch.res[ch.i] = {cls:'miss'}; G.set.skips = (G.set.skips||0)+1; chordNext();
+  }
+}
 function onChord(ok){
   const ch = G.chord;
   ch.res[ch.i] = {cls: ok?'ok':'bad'};
   if (ok) G.set.ok++; else G.set.errors++;
+  chordNext();
+}
+function chordNext(){
+  const ch = G.chord;
   ch.i++; G.hint = false; drawChord();
   if (ch.i>=ch.pos.length){
     G.lock = true; S.tot.chords++; save();
@@ -868,14 +937,14 @@ function showSummary({title, big, bigLabel, stars, facts, again, note}){
 }
 function endLine(secs){
   if (!G) return;
-  const ln = G.line, n = ln.notes.length, err = ln.errors, per = secs/n;
+  const ln = G.line, n = ln.notes.length, err = ln.errors, per = secs/n, sk = ln.skips||0;
   S.tot.lines++; if (err===0) S.tot.perfect++;
   const stars = err===0 ? (per<=2.5 ? 3 : 2) : err<=1 ? 2 : err<=3 ? 1 : 0;
-  let note = '';
-  if (err===0 && (!S.best.lineTime || secs<S.best.lineTime)){ note = S.best.lineTime ? 'Nouveau record de vitesse sans faute !' : 'Premier temps sans faute enregistré.'; S.best.lineTime = secs; }
+  let note = sk ? `${sk} note${sk>1?'s':''} non entendue${sk>1?'s':''}, sans pénalité.` : '';
+  if (err===0 && (!S.best.lineTime || secs<S.best.lineTime)){ note = (note ? note+' ' : '') + (S.best.lineTime ? 'Nouveau record de vitesse sans faute !' : 'Premier temps sans faute enregistré.'); S.best.lineTime = secs; }
   save();
   showSummary({title: err===0 ? 'Sans faute !' : err<=2 ? 'Bien lu !' : 'On recommence ?', big: fmt(secs), bigLabel:'pour lire la ligne',
-    stars, facts:[[ (n-err)+' / '+n, 'notes justes'], [per.toFixed(1).replace('.',',')+' s', 'par note'], [S.best.lineTime?fmt(S.best.lineTime):'—', 'record sans faute']],
+    stars, facts:[[ (n-err-sk)+' / '+n, 'notes justes'], [per.toFixed(1).replace('.',',')+' s', 'par note'], [S.best.lineTime?fmt(S.best.lineTime):'—', 'record sans faute']],
     again:'Ligne suivante', note});
 }
 function endChords(){
@@ -934,8 +1003,8 @@ function renderHome(){
   $('clefChips').innerHTML = CLEF_KEYS.map(k=>`<label class="chip"><input type="checkbox" id="clef-${k}" value="${k}" ${c.clefs.includes(k)?'checked':''}><span><i aria-hidden="true">${CLEFS[k].glyph}</i>${CLEFS[k].short}</span></label>`).join('');
   $('levelSeg').innerHTML = LEVELS.map((l,i)=>`<button aria-pressed="${i===c.level}" data-l="${i}">${l.label}</button>`).join('');
   $('optChanges').checked = c.changes; $('optSound').checked = c.sound; $('optReveal').checked = c.reveal;
-  $('inputSeg').innerHTML = INPUTS.map(([k,l])=>`<button aria-pressed="${k===c.input}" data-i="${k}" ${k==='voice'&&!SR?'disabled':''}>${l}</button>`).join('');
-  $('inputNote').textContent = c.input==='tap' && !SR ? INPUT_NOTES.tap + ' Le nom des notes à voix haute demande Google Chrome.' : INPUT_NOTES[c.input];
+  $('inputSeg').innerHTML = INPUTS.map(([k,l])=>`<button aria-pressed="${k===c.input}" data-i="${k}" >${l}</button>`).join('');
+  $('inputNote').textContent = INPUT_NOTES[c.input];
 
   const r = rankOf(S.xp), cur = RANKS[r], nxt = RANKS[r+1];
   $('rankName').textContent = cur.name; $('rankGlyph').textContent = cur.g;
@@ -1011,7 +1080,7 @@ function buildPad(){
 }
 $('backBtn').onclick = stopGame;
 $('micBtn').onclick = ()=>{
-  const order = INPUTS.map(i=>i[0]).filter(k=>k!=='voice' || SR);
+  const order = INPUTS.map(i=>i[0]);
   setInput(order[(order.indexOf(cfg().input)+1) % order.length]);
 };
 $('hintBtn').onclick = ()=>{

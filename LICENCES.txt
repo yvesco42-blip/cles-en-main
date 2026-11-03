@@ -1,0 +1,4 @@
+Clés en main utilise :
+
+- vosk-browser 0.0.8 (vosk.js), licence Apache 2.0 : https://github.com/ccoreilly/vosk-browser
+- vosk-model-small-fr-0.22 (model.tar.gz, version allégée par build_model.py), licence Apache 2.0 : https://alphacephei.com/vosk/models
