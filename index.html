@@ -418,7 +418,11 @@ async function voiceStart(){
     if (!V.model){
       toast('Préparation de la voix…');
       await loadScript('vosk.js');
-      V.model = await Vosk.createModel('model.tar.gz');
+      // adresse complète : le moteur tourne dans un worker qui ne connaît pas le sous-dossier du site
+      V.model = await Promise.race([
+        Vosk.createModel(new URL('model.tar.gz', location.href).href),
+        new Promise((_,ko)=>setTimeout(()=>ko(new Error('délai dépassé')), 180000)),
+      ]);
     }
     stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1, echoCancellation:false, noiseSuppression:true, autoGainControl:true}});
   } catch(e){

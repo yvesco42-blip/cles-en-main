@@ -1,4 +1,4 @@
-const CACHE = 'cles-en-main-v4';
+const CACHE = 'cles-en-main-v5';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
