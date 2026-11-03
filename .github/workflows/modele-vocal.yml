@@ -1,0 +1,34 @@
+name: modele-vocal
+on:
+  push:
+    paths:
+      - '.github/workflows/modele-vocal.yml'
+      - 'build_model.py'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pages: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preparer le moteur vocal
+        run: |
+          curl -fsSL -o m.zip https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip
+          unzip -q m.zip
+          python3 build_model.py vosk-model-small-fr-0.22 model.tar.gz
+          npm pack vosk-browser@0.0.8
+          tar -xzf vosk-browser-0.0.8.tgz
+          cp package/dist/vosk.js vosk.js
+          rm -rf m.zip vosk-model-small-fr-0.22 package vosk-browser-0.0.8.tgz
+      - name: Enregistrer dans le depot
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git add model.tar.gz vosk.js
+          git commit -m "Moteur vocal"
+          git push
+      - name: Republier le site
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${{ github.repository }}/pages/builds
