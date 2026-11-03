@@ -1,0 +1,25 @@
+{
+  "name": "Clés en main",
+  "short_name": "Clés en main",
+  "lang": "fr",
+  "description": "Jeu de lecture de notes : clés de sol, fa, ut 3 et ut 4.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#E8EDF7",
+  "theme_color": "#E0436A",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
