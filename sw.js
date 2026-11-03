@@ -1,9 +1,11 @@
-const CACHE = 'cles-en-main-v5';
+const CACHE = 'cles-en-main-v6';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE)
+    .then(c => c.addAll(SHELL.map(u => new Request(u, {cache: 'reload'}))))
+    .then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys()
@@ -18,7 +20,9 @@ self.addEventListener('fetch', e => {
   const key = e.request.mode === 'navigate' ? './' : e.request;
   e.respondWith(caches.open(CACHE).then(async c => {
     const hit = await c.match(key, {ignoreSearch: true});
-    const net = fetch(e.request).then(r => { if (r.ok) c.put(key, r.clone()); return r; });
+    const own = url.origin === location.origin;
+    const net = fetch(own ? url.href : e.request, own ? {cache: 'no-cache'} : undefined)
+      .then(r => { if (r.ok) c.put(key, r.clone()); return r; });
     if (hit) { e.waitUntil(net.catch(() => {})); return hit; }
     return net;
   }));
