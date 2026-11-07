@@ -964,7 +964,7 @@ function buildScore(){
   let tune = null;
   if (c.style==='known'){ const pool = TUNES.filter(t=>t.name!==G.lastTune); tune = pick(pool); G.lastTune = tune.name; }
   const beats = rh==='free' ? 4 : tune ? tune.ts : pick([4,4,4,3,2]);
-  const bps = Math.min(8, Math.max(1, Math.floor(W/(58*beats))));
+  let bps = Math.min(8, Math.max(1, Math.floor(W/(58*beats))));
   const want = rows*bps;
   let bars = tune ? parseTune(tune)
     : c.style==='random' ? Array.from({length:want}, ()=>pick(PATTERNS[beats]).map(dur=>({dur})))
@@ -978,6 +978,7 @@ function buildScore(){
     if (gap) last[last.length-1].dur += gap;
     if (last[last.length-1].dur===4 && last.length>1) last[last.length-1].dur = 1+gap;
   }
+  bps = Math.min(bps, Math.ceil(bars.length/rows));  // un air court occupe quand même toutes les portées
   const multi = c.changes && c.clefs.length>1;
   let clef = pickClef(), pref = null;
   const sys = [], notes = [], metaBars = [];
